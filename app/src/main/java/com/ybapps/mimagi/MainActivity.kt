@@ -133,14 +133,7 @@ class MainActivity : ComponentActivity() {
         } catch (_: SecurityException) {
             status("אין הרשאת BLE; הסריקה הקלאסית ממשיכה.")
         } catch (e: Exception) {
-            status("שגיאה בסריקת BLE: \${e.message ?: "לא ידועה"}")
-        }
-    }
-ריקה פעילה — מחפש מכשירי BLE משדרים…")
-        } catch (_: SecurityException) {
-            status("אין הרשאת Bluetooth לסריקה. בדוק הרשאות אפליקציה.")
-        } catch (e: Exception) {
-            status("לא ניתן להתחיל סריקה: \${e.message ?: "שגיאה לא ידועה"}")
+            status("שגיאה בסריקת BLE: ${e.message ?: "לא ידועה"}")
         }
     }
     @SuppressLint("MissingPermission")
