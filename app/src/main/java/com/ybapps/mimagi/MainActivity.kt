@@ -57,7 +57,17 @@ class MainActivity : ComponentActivity() {
         val granted = permissions.all { result[it] == true || ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
         val listener = pendingListener
         pendingListener = null
-        if (granted && listener != null) st    @SuppressLint("MissingPermission")
+        if (granted && listener != null) {
+            startScan(listener, onScanStatus ?: {})
+        } else if (!granted) {
+            onScanStatus?.invoke("לא ניתנה הרשאת Bluetooth. אפשר לאשר אותה בהגדרות האפליקציה.")
+        }
+    }
+
+    private fun hasPermissions(): Boolean =
+        permissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
+
+    @SuppressLint("MissingPermission")
     private fun startScan(listener: (NearbyDevice) -> Unit, status: (String) -> Unit) {
         onScanStatus = status
         if (!hasPermissions()) {
