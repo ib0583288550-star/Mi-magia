@@ -3,11 +3,14 @@ package com.ybapps.mimagi
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Context
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.RingtoneManager
@@ -42,6 +45,9 @@ class MainActivity : ComponentActivity() {
     private var scanner: BluetoothLeScanner? = null
     private var callback: ScanCallback? = null
     private var onFound: ((NearbyDevice) -> Unit)? = null
+    private var classicReceiver: BroadcastReceiver? = null
+    private var receiverRegistered = false
+    private var bluetoothAdapter: BluetoothAdapter? = null
     private var pendingListener: ((NearbyDevice) -> Unit)? = null
     private var onScanStatus: ((String) -> Unit)? = null
     private val permissions = if (Build.VERSION.SDK_INT >= 31) {
@@ -51,13 +57,7 @@ class MainActivity : ComponentActivity() {
         val granted = permissions.all { result[it] == true || ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
         val listener = pendingListener
         pendingListener = null
-        if (granted && listener != null) startScan(listener, onScanStatus ?: {})
-        else onScanStatus?.invoke("לא ניתנה הרשאת Bluetooth. אפשר לאשר אותה בהגדרות האפליקציה.")
-    }
-
-    private fun hasPermissions() = permissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
-
-    @SuppressLint("MissingPermission")
+        if (granted && listener != null) st    @SuppressLint("MissingPermission")
     private fun startScan(listener: (NearbyDevice) -> Unit, status: (String) -> Unit) {
         onScanStatus = status
         if (!hasPermissions()) {
@@ -69,9 +69,47 @@ class MainActivity : ComponentActivity() {
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         if (adapter == null) { status("במכשיר הזה לא נמצא מתאם Bluetooth."); return }
         if (!adapter.isEnabled) { status("הפעל Bluetooth במכשיר ונסה שוב."); return }
-        scanner = adapter.bluetoothLeScanner
-        if (scanner == null) { status("סריקת BLE אינה זמינה כרגע. כבה והפעל Bluetooth ונסה שוב."); return }
+        bluetoothAdapter = adapter
         onFound = listener
+        try { classicReceiver?.let { if (receiverRegistered) unregisterReceiver(it) } } catch (_: Exception) {}
+        receiverRegistered = false
+        classicReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action != BluetoothDevice.ACTION_FOUND) return
+                try {
+                    val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= 33) {
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    }
+                    if (device != null) {
+                        val address = device.address
+                        val name = device.name ?: "מכשיר Bluetooth"
+                        val rssi = intent.getShortExtra(BluetoothDevice.EXTRA_RSSI, Short.MIN_VALUE).toInt()
+                        onFound?.invoke(NearbyDevice(address, name, rssi))
+                    }
+                } catch (_: SecurityException) {
+                    status("Android חסם גישה לפרטי Bluetooth. בדוק הרשאות מכשירים בקרבת מקום.")
+                }
+            }
+        }
+        val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(classicReceiver, filter, Context.RECEIVER_EXPORTED)
+        else registerReceiver(classicReceiver, filter)
+        receiverRegistered = true
+        try {
+            if (adapter.isDiscovering) adapter.cancelDiscovery()
+            if (adapter.startDiscovery()) status("סריקה משולבת פעילה — מחפש BLE וגם מכשירי Bluetooth גלויים…")
+            else status("הסריקה הקלאסית לא התחילה; מנסה BLE. ודא ש-Bluetooth פעיל.")
+        } catch (_: SecurityException) {
+            status("אין הרשאה לסריקת Bluetooth קלאסית. בדוק הרשאות.")
+        }
+        scanner = adapter.bluetoothLeScanner
+        if (scanner == null) {
+            status("סריקה קלאסית פעילה; BLE אינו זמין כרגע.")
+            return
+        }
         callback?.let { try { scanner?.stopScan(it) } catch (_: Exception) {} }
         callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -82,17 +120,23 @@ class MainActivity : ComponentActivity() {
                         ?: "מכשיר Bluetooth"
                     onFound?.invoke(NearbyDevice(address, name, result.rssi))
                 } catch (_: SecurityException) {
-                    status("Android חסם גישה לפרטי המכשיר. בדוק הרשאת מכשירים בקרבת מקום.")
+                    status("Android חסם גישה לפרטי BLE. בדוק הרשאות.")
                 }
             }
             override fun onScanFailed(errorCode: Int) {
-                status("סריקת Bluetooth נכשלה (קוד $errorCode). נסה לכבות ולהפעיל Bluetooth.")
+                status("סריקת BLE נכשלה (קוד $errorCode); הסריקה הקלאסית ממשיכה.")
             }
         }
         try {
             scanner?.startScan(null, android.bluetooth.le.ScanSettings.Builder()
                 .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY).build(), callback)
-            status("הסריקה פעילה — מחפש מכשירי BLE משדרים…")
+        } catch (_: SecurityException) {
+            status("אין הרשאת BLE; הסריקה הקלאסית ממשיכה.")
+        } catch (e: Exception) {
+            status("שגיאה בסריקת BLE: \${e.message ?: "לא ידועה"}")
+        }
+    }
+ריקה פעילה — מחפש מכשירי BLE משדרים…")
         } catch (_: SecurityException) {
             status("אין הרשאת Bluetooth לסריקה. בדוק הרשאות אפליקציה.")
         } catch (e: Exception) {
@@ -101,7 +145,11 @@ class MainActivity : ComponentActivity() {
     }
     @SuppressLint("MissingPermission")
     private fun stopScan() {
-        try { callback?.let { scanner?.stopScan(it) } } catch (_: Exception) { }
+        try { callback?.let { scanner?.stopScan(it) } } catch (_: Exception) {}
+        try { bluetoothAdapter?.let { if (it.isDiscovering) it.cancelDiscovery() } } catch (_: Exception) {}
+        try { classicReceiver?.let { if (receiverRegistered) unregisterReceiver(it) } } catch (_: Exception) {}
+        receiverRegistered = false
+        classicReceiver = null
         callback = null
     }
 
