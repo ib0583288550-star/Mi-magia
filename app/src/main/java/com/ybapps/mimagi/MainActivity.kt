@@ -42,32 +42,63 @@ class MainActivity : ComponentActivity() {
     private var scanner: BluetoothLeScanner? = null
     private var callback: ScanCallback? = null
     private var onFound: ((NearbyDevice) -> Unit)? = null
+    private var pendingListener: ((NearbyDevice) -> Unit)? = null
+    private var onScanStatus: ((String) -> Unit)? = null
     private val permissions = if (Build.VERSION.SDK_INT >= 31) {
-        arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT) +
-            if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS) else emptyArray()
+        arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
     } else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        val granted = permissions.all { result[it] == true || ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
+        val listener = pendingListener
+        pendingListener = null
+        if (granted && listener != null) startScan(listener, onScanStatus ?: {})
+        else onScanStatus?.invoke("לא ניתנה הרשאת Bluetooth. אפשר לאשר אותה בהגדרות האפליקציה.")
+    }
 
     private fun hasPermissions() = permissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
 
     @SuppressLint("MissingPermission")
-    private fun startScan(listener: (NearbyDevice) -> Unit) {
-        if (!hasPermissions()) { permissionLauncher.launch(permissions); return }
+    private fun startScan(listener: (NearbyDevice) -> Unit, status: (String) -> Unit) {
+        onScanStatus = status
+        if (!hasPermissions()) {
+            pendingListener = listener
+            permissionLauncher.launch(permissions)
+            status("מבקש הרשאת Bluetooth…")
+            return
+        }
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-        if (adapter == null || !adapter.isEnabled) return
+        if (adapter == null) { status("במכשיר הזה לא נמצא מתאם Bluetooth."); return }
+        if (!adapter.isEnabled) { status("הפעל Bluetooth במכשיר ונסה שוב."); return }
         scanner = adapter.bluetoothLeScanner
+        if (scanner == null) { status("סריקת BLE אינה זמינה כרגע. כבה והפעל Bluetooth ונסה שוב."); return }
         onFound = listener
-        callback?.let { scanner?.stopScan(it) }
+        callback?.let { try { scanner?.stopScan(it) } catch (_: Exception) {} }
         callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
-                val name = try { result.device.name } catch (_: SecurityException) { null }
-                    ?: result.scanRecord?.deviceName ?: "מכשיר Bluetooth"
-                onFound?.invoke(NearbyDevice(result.device.address, name, result.rssi))
+                try {
+                    val address = result.device.address
+                    val name = result.scanRecord?.deviceName
+                        ?: try { result.device.name } catch (_: SecurityException) { null }
+                        ?: "מכשיר Bluetooth"
+                    onFound?.invoke(NearbyDevice(address, name, result.rssi))
+                } catch (_: SecurityException) {
+                    status("Android חסם גישה לפרטי המכשיר. בדוק הרשאת מכשירים בקרבת מקום.")
+                }
+            }
+            override fun onScanFailed(errorCode: Int) {
+                status("סריקת Bluetooth נכשלה (קוד $errorCode). נסה לכבות ולהפעיל Bluetooth.")
             }
         }
-        scanner?.startScan(callback)
+        try {
+            scanner?.startScan(null, android.bluetooth.le.ScanSettings.Builder()
+                .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY).build(), callback)
+            status("הסריקה פעילה — מחפש מכשירי BLE משדרים…")
+        } catch (_: SecurityException) {
+            status("אין הרשאת Bluetooth לסריקה. בדוק הרשאות אפליקציה.")
+        } catch (e: Exception) {
+            status("לא ניתן להתחיל סריקה: \${e.message ?: "שגיאה לא ידועה"}")
+        }
     }
-
     @SuppressLint("MissingPermission")
     private fun stopScan() {
         try { callback?.let { scanner?.stopScan(it) } } catch (_: Exception) { }
@@ -83,7 +114,7 @@ class MainActivity : ComponentActivity() {
                 background = androidx.compose.ui.graphics.Color(0xFF0B1220),
                 surface = androidx.compose.ui.graphics.Color(0xFF162235)
             )) {
-                MiMagiScreen({ startScan(it) }, { stopScan() })
+                MiMagiScreen({ listener, status -> startScan(listener, status) }, { stopScan() })
             }
         }
     }
@@ -92,7 +123,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit) -> Unit, stopScan: () -> Unit) {
+fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit, (String) -> Unit) -> Unit, stopScan: () -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("mimagi", Context.MODE_PRIVATE) }
     var saved by remember { mutableStateOf(loadSaved(prefs)) }
@@ -100,6 +131,7 @@ fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit) -> Unit, stopScan: () -> Un
     var scanning by remember { mutableStateOf(false) }
     var mode by remember { mutableStateOf(prefs.getString("mode", "both") ?: "both") }
     var banner by remember { mutableStateOf<String?>(null) }
+    var scanStatus by remember { mutableStateOf("לחץ על התחלת סריקה כדי לחפש מכשירי BLE בסביבה.") }
     var selected by remember { mutableStateOf<NearbyDevice?>(null) }
     var nameInput by remember { mutableStateOf("") }
     var lastAlert by remember { mutableStateOf("") }
@@ -167,17 +199,17 @@ fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit) -> Unit, stopScan: () -> Un
                             if (scanning) { scanning = false; stopScan() }
                             else {
                                 nearby = emptyList(); scanning = true
-                                startScan { device ->
+                                startScan({ device ->
                                     nearby = (nearby.filterNot { it.address == device.address } + device).sortedByDescending { it.rssi }
                                     val known = saved.firstOrNull { it.address == device.address }
                                     if (known != null && lastAlert != known.address) { lastAlert = known.address; alert(known.name) }
-                                }
+                                }, { message -> scanStatus = message })
                             }
                         }, modifier = Modifier.fillMaxWidth()) {
                             Icon(Icons.Default.Bluetooth, null); Spacer(Modifier.width(8.dp))
                             Text(if (scanning) "עצור סריקה" else "התחל סריקה")
                         }
-                        Text(if (scanning) "הסריקה למציאת מכשירים חדשים פעילה" else "הסריקה למציאת מכשירים חדשים כבויה", style = MaterialTheme.typography.bodySmall)
+                        Text(if (scanning) scanStatus else "הסריקה למציאת מכשירים חדשים כבויה", style = MaterialTheme.typography.bodySmall)
                         OutlinedButton(
                             onClick = {
                                 if (backgroundEnabled) {
