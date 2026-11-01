@@ -8,12 +8,14 @@ import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -101,6 +103,16 @@ fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit) -> Unit, stopScan: () -> Un
     var selected by remember { mutableStateOf<NearbyDevice?>(null) }
     var nameInput by remember { mutableStateOf("") }
     var lastAlert by remember { mutableStateOf("") }
+    var backgroundEnabled by remember { mutableStateOf(prefs.getBoolean("background_enabled", false)) }
+    var editingPerson by remember { mutableStateOf<SavedDevice?>(null) }
+    var editName by remember { mutableStateOf("") }
+    var pendingSoundAddress by remember { mutableStateOf<String?>(null) }
+    val soundPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val address = pendingSoundAddress
+        val uri = result.data?.getParcelableExtra<android.net.Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+        if (address != null && uri != null) prefs.edit().putString("sound_$address", uri.toString()).apply()
+        pendingSoundAddress = null
+    }
 
     fun save(list: List<SavedDevice>) {
         saved = list
@@ -165,7 +177,24 @@ fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit) -> Unit, stopScan: () -> Un
                             Icon(Icons.Default.Bluetooth, null); Spacer(Modifier.width(8.dp))
                             Text(if (scanning) "עצור סריקה" else "התחל סריקה")
                         }
-                        Text(if (scanning) "הסריקה פעילה כל עוד האפליקציה פתוחה" else "הסריקה כבויה", style = MaterialTheme.typography.bodySmall)
+                        Text(if (scanning) "הסריקה למציאת מכשירים חדשים פעילה" else "הסריקה למציאת מכשירים חדשים כבויה", style = MaterialTheme.typography.bodySmall)
+                        OutlinedButton(
+                            onClick = {
+                                if (backgroundEnabled) {
+                                    context.stopService(Intent(context, PresenceService::class.java))
+                                    backgroundEnabled = false
+                                    prefs.edit().putBoolean("background_enabled", false).apply()
+                                } else {
+                                    val needed = if (Build.VERSION.SDK_INT >= 31) Manifest.permission.BLUETOOTH_SCAN else Manifest.permission.ACCESS_FINE_LOCATION
+                                    if (ContextCompat.checkSelfPermission(context, needed) == PackageManager.PERMISSION_GRANTED) {
+                                        ContextCompat.startForegroundService(context, Intent(context, PresenceService::class.java))
+                                        backgroundEnabled = true
+                                        prefs.edit().putBoolean("background_enabled", true).apply()
+                                    } else banner = "צריך לאשר הרשאת Bluetooth/מיקום כדי להפעיל מעקב ברקע"
+                                }
+                            }, modifier = Modifier.fillMaxWidth()
+                        ) { Text(if (backgroundEnabled) "כבה התרעות ברקע" else "הפעל התרעות ברקע") }
+                        Text("המעקב ממשיך גם כשהאפליקציה ברקע, בכפוף למגבלות Android ו-Bluetooth.", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -207,12 +236,36 @@ fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit) -> Unit, stopScan: () -> Un
                             Text(person.name, fontWeight = FontWeight.Bold)
                             Text(person.address, style = MaterialTheme.typography.labelSmall)
                         }
-                        TextButton(onClick = { save(saved.filterNot { it.address == person.address }) }) { Text("מחיקה") }
+                        TextButton(onClick = { editingPerson = person; editName = person.name }) { Text("עריכה") }
+                        TextButton(onClick = {
+                            pendingSoundAddress = person.address
+                            val pick = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_NOTIFICATION)
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "בחר צליל עבור ${person.name}")
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                            }
+                            soundPicker.launch(pick)
+                        }) { Text("צליל") }
+                        TextButton(onClick = { save(saved.filterNot { it.address == person.address }); prefs.edit().remove("sound_${person.address}").apply() }) { Text("מחיקה") }
                     }
                 }
             }
             item { Text("חשוב: לא כל טלפון משדר BLE באופן שניתן לגלות. כתובת המכשיר עשויה להשתנות, ולכן זיהוי חוזר אינו מובטח.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
+    }
+
+    editingPerson?.let { person ->
+        AlertDialog(
+            onDismissRequest = { editingPerson = null },
+            title = { Text("עריכת שם") },
+            text = { OutlinedTextField(editName, { editName = it }, label = { Text("שם שיופיע בהתרעה") }, singleLine = true) },
+            confirmButton = { TextButton(onClick = {
+                save(saved.map { if (it.address == person.address) it.copy(name = editName.trim().ifBlank { person.name }) else it })
+                editingPerson = null
+            }) { Text("שמור") } },
+            dismissButton = { TextButton(onClick = { editingPerson = null }) { Text("ביטול") } }
+        )
     }
 
     selected?.let { device ->
