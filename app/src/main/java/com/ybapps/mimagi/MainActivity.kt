@@ -190,7 +190,7 @@ class MainActivity : ComponentActivity() {
                 onBackground = androidx.compose.ui.graphics.Color(0xFFF2F7FC),
                 surfaceVariant = androidx.compose.ui.graphics.Color(0xFF20344B),
                 error = androidx.compose.ui.graphics.Color(0xFFFF7885)
-            )) {
+            ), shapes = androidx.compose.material3.Shapes(small = RoundedCornerShape(12.dp), medium = RoundedCornerShape(20.dp), large = RoundedCornerShape(28.dp))) {
                 MiMagiScreen({ listener, status -> startScan(listener, status) }, { stopScan() })
             }
         }
@@ -247,9 +247,15 @@ fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit, (String) -> Unit) -> Unit, 
     }
 
     Scaffold(containerColor = Color(0xFF08111F), topBar = { TopAppBar(colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF08111F), titleContentColor = Color.White), title = {
-        Column {
-            Text("מי מגיע?", fontWeight = FontWeight.Bold)
-            Text("מזהים מכשירי Bluetooth בסביבה", style = MaterialTheme.typography.labelSmall)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(42.dp).background(Brush.linearGradient(listOf(Color(0xFF155E75), Color(0xFF123B54))), RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Bluetooth, null, tint = Color(0xFF58D7F5), modifier = Modifier.size(25.dp))
+            }
+            Spacer(Modifier.width(11.dp))
+            Column {
+                Text("מי מגיע?", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleLarge)
+                Text("SMART PRESENCE", color = Color(0xFF58D7F5), style = MaterialTheme.typography.labelSmall)
+            }
         }
     }, actions = { Icon(Icons.Default.NotificationsActive, null); Spacer(Modifier.width(14.dp)) }) }) { pad ->
         LazyColumn(
@@ -269,9 +275,10 @@ fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit, (String) -> Unit) -> Unit, 
             }
             item {
                 Card {
-                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("סריקה בסביבה", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Text("בחר מכשיר שנמצא ושמור אותו בשם אישי.")
+                    Column(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF12364B), Color(0xFF102337))), RoundedCornerShape(24.dp)).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("BLUETOOTH RADAR", color = Color(0xFF58D7F5), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                        Text("מי בסביבה שלך?", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
+                        Text("מצא מכשירים קרובים ושמור אותם בשם אישי כדי לזהות אותם בפעם הבאה.", color = Color(0xFFC2D2E2), style = MaterialTheme.typography.bodyMedium)
                         Button(onClick = {
                             if (scanning) { scanning = false; stopScan() }
                             else {
@@ -282,7 +289,7 @@ fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit, (String) -> Unit) -> Unit, 
                                     if (known != null && lastAlert != known.address) { lastAlert = known.address; alert(known.name) }
                                 }, { message -> scanStatus = message })
                             }
-                        }, modifier = Modifier.fillMaxWidth()) {
+                        }, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF58D7F5), contentColor = Color(0xFF06202B))) {
                             Icon(Icons.Default.Bluetooth, null); Spacer(Modifier.width(8.dp))
                             Text(if (scanning) "עצור סריקה" else "התחל סריקה")
                         }
