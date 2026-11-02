@@ -21,6 +21,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -34,6 +36,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
@@ -85,7 +89,12 @@ class MainActivity : ComponentActivity() {
         receiverRegistered = false
         classicReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                if (intent?.action != BluetoothDevice.ACTION_FOUND) return
+                when (intent?.action) {
+                    BluetoothAdapter.ACTION_DISCOVERY_STARTED -> { status("סריקת Bluetooth קלאסית התחילה בהצלחה."); return }
+                    BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> { status("הסריקה הקלאסית הסתיימה. סריקת BLE ממשיכה."); return }
+                    BluetoothDevice.ACTION_FOUND -> Unit
+                    else -> return
+                }
                 try {
                     val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= 33) {
                         intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
@@ -104,16 +113,29 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
+        val filter = IntentFilter().apply {
+            addAction(BluetoothDevice.ACTION_FOUND)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+        }
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(classicReceiver, filter, Context.RECEIVER_EXPORTED)
         else registerReceiver(classicReceiver, filter)
         receiverRegistered = true
         try {
-            if (adapter.isDiscovering) adapter.cancelDiscovery()
-            if (adapter.startDiscovery()) status("סריקה משולבת פעילה — מחפש BLE וגם מכשירי Bluetooth גלויים…")
-            else status("הסריקה הקלאסית לא התחילה; מנסה BLE. ודא ש-Bluetooth פעיל.")
-        } catch (_: SecurityException) {
-            status("אין הרשאה לסריקת Bluetooth קלאסית. בדוק הרשאות.")
+            if (adapter.isDiscovering) {
+                status("סריקה קלאסית כבר פעילה — ממשיך להאזין למכשירים גלויים.")
+            } else if (adapter.startDiscovery()) {
+                status("סריקה קלאסית הופעלה. מחפש מכשירים גלויים וגם BLE…")
+            } else {
+                val scanGranted = if (Build.VERSION.SDK_INT >= 31) ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED else ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                val connectGranted = Build.VERSION.SDK_INT < 31 || ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                val detail = when { !adapter.isEnabled -> "Bluetooth כבוי."; !scanGranted -> "חסרה הרשאת סריקת Bluetooth."; !connectGranted -> "חסרה הרשאת מכשירים בקרבת מקום."; else -> "Android החזיר false בלי למסור קוד שגיאה. ייתכן ששירות Bluetooth עסוק או שהיצרן חסם גילוי קלאסי." }
+                status("שגיאה בסריקה הקלאסית: " + detail + " BLE ינסה להמשיך. Android " + Build.VERSION.SDK_INT + ", מצב מתאם " + adapter.state + ".")
+            }
+        } catch (e: SecurityException) {
+            status("שגיאת הרשאה בסריקה הקלאסית: " + (e.message ?: "Android חסם את startDiscovery") + ". בדוק הרשאת מכשירים בקרבת מקום.")
+        } catch (e: Exception) {
+            status("שגיאה בהפעלת סריקה קלאסית: " + e.javaClass.simpleName + ": " + (e.message ?: "ללא פירוט") + ". BLE ינסה להמשיך.")
         }
         scanner = adapter.bluetoothLeScanner
         if (scanner == null) {
@@ -163,7 +185,11 @@ class MainActivity : ComponentActivity() {
                 primary = androidx.compose.ui.graphics.Color(0xFF7DD3FC),
                 secondary = androidx.compose.ui.graphics.Color(0xFF34D399),
                 background = androidx.compose.ui.graphics.Color(0xFF0B1220),
-                surface = androidx.compose.ui.graphics.Color(0xFF162235)
+                surface = androidx.compose.ui.graphics.Color(0xFF132238),
+                onSurface = androidx.compose.ui.graphics.Color(0xFFF2F7FC),
+                onBackground = androidx.compose.ui.graphics.Color(0xFFF2F7FC),
+                surfaceVariant = androidx.compose.ui.graphics.Color(0xFF20344B),
+                error = androidx.compose.ui.graphics.Color(0xFFFF7885)
             )) {
                 MiMagiScreen({ listener, status -> startScan(listener, status) }, { stopScan() })
             }
@@ -220,7 +246,7 @@ fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit, (String) -> Unit) -> Unit, 
         }
     }
 
-    Scaffold(topBar = { TopAppBar(title = {
+    Scaffold(containerColor = Color(0xFF08111F), topBar = { TopAppBar(colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF08111F), titleContentColor = Color.White), title = {
         Column {
             Text("מי מגיע?", fontWeight = FontWeight.Bold)
             Text("מזהים מכשירי Bluetooth בסביבה", style = MaterialTheme.typography.labelSmall)
@@ -260,7 +286,17 @@ fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit, (String) -> Unit) -> Unit, 
                             Icon(Icons.Default.Bluetooth, null); Spacer(Modifier.width(8.dp))
                             Text(if (scanning) "עצור סריקה" else "התחל סריקה")
                         }
-                        Text(if (scanning) scanStatus else "הסריקה למציאת מכשירים חדשים כבויה", style = MaterialTheme.typography.bodySmall)
+                        val isScanError = scanStatus.contains("שגיאה") || scanStatus.contains("נכשל") || scanStatus.contains("חסרה") || scanStatus.contains("חסם") || scanStatus.contains("לא התחילה")
+                        Card(colors = CardDefaults.cardColors(containerColor = if (isScanError) Color(0xFF3A202B) else Color(0xFF102F36)), shape = RoundedCornerShape(14.dp), border = androidx.compose.foundation.BorderStroke(1.dp, if (isScanError) Color(0xFF9B4655) else Color(0xFF235D58))) {
+                            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.Top) {
+                                Text(if (isScanError) "!" else "●", color = if (isScanError) Color(0xFFFF8792) else Color(0xFF65E0B5), fontWeight = FontWeight.Black)
+                                Spacer(Modifier.width(9.dp))
+                                Column {
+                                    Text(if (isScanError) "פרטי שגיאה" else "מצב הסריקה", fontWeight = FontWeight.Bold, color = Color.White)
+                                    Text(scanStatus, style = MaterialTheme.typography.bodySmall, color = if (isScanError) Color(0xFFFFC2C8) else Color(0xFFB9D4D5))
+                                }
+                            }
+                        }
                         OutlinedButton(
                             onClick = {
                                 if (backgroundEnabled) {
@@ -295,7 +331,7 @@ fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit, (String) -> Unit) -> Unit, 
                 }
             }
             item { Text("מכשירים שנמצאו (${nearby.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
-            if (nearby.isEmpty()) item { Text("עדיין לא נמצאו מכשירים. ודא שמכשירים בסביבה משדרים BLE.", style = MaterialTheme.typography.bodySmall) }
+            if (nearby.isEmpty()) item { Text("עדיין לא נמצאו מכשירים. מכשירים קלאסיים צריכים להיות במצב גלוי, ומכשירי BLE צריכים לשדר פרסום Bluetooth.", style = MaterialTheme.typography.bodySmall) }
             items(nearby, key = { it.address }) { device ->
                 Card(onClick = { selected = device; nameInput = device.name.takeUnless { it == "מכשיר Bluetooth" } ?: "" }) {
                     Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
