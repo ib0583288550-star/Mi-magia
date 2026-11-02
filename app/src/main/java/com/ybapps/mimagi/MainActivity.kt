@@ -132,12 +132,10 @@ class MainActivity : ComponentActivity() {
     }
     @SuppressLint("MissingPermission")
     private fun stopScan() {
-        try { callback?.let { scanner?.stopScan(it) } } catch (_: Exception) {}
         try { bluetoothAdapter?.let { if (it.isDiscovering) it.cancelDiscovery() } } catch (_: Exception) {}
         try { classicReceiver?.let { if (receiverRegistered) unregisterReceiver(it) } } catch (_: Exception) {}
         receiverRegistered = false
         classicReceiver = null
-        callback = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
