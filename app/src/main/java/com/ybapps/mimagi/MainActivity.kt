@@ -5,9 +5,6 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
-import android.bluetooth.le.BluetoothLeScanner
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.content.BroadcastReceiver
 import android.content.IntentFilter
@@ -46,8 +43,6 @@ data class NearbyDevice(val address: String, val name: String, val rssi: Int)
 data class SavedDevice(val address: String, val name: String)
 
 class MainActivity : ComponentActivity() {
-    private var scanner: BluetoothLeScanner? = null
-    private var callback: ScanCallback? = null
     private var onFound: ((NearbyDevice) -> Unit)? = null
     private var classicReceiver: BroadcastReceiver? = null
     private var receiverRegistered = false
@@ -90,8 +85,8 @@ class MainActivity : ComponentActivity() {
         classicReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
-                    BluetoothAdapter.ACTION_DISCOVERY_STARTED -> { status("סריקת Bluetooth קלאסית התחילה בהצלחה."); return }
-                    BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> { status("הסריקה הקלאסית הסתיימה. סריקת BLE ממשיכה."); return }
+                    BluetoothAdapter.ACTION_DISCOVERY_STARTED -> { status("סריקת Bluetooth רגילה התחילה. מחפש מכשירים גלויים…"); return }
+                    BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> { status("הסריקה הסתיימה. לחץ שוב כדי לסרוק מחדש."); return }
                     BluetoothDevice.ACTION_FOUND -> Unit
                     else -> return
                 }
@@ -109,7 +104,7 @@ class MainActivity : ComponentActivity() {
                         onFound?.invoke(NearbyDevice(address, name, rssi))
                     }
                 } catch (_: SecurityException) {
-                    status("Android חסם גישה לפרטי Bluetooth. בדוק הרשאות מכשירים בקרבת מקום.")
+                    status("אין הרשאה לקרוא פרטי Bluetooth. אשר הרשאת מכשירים בקרבת מקום.")
                 }
             }
         }
@@ -123,49 +118,16 @@ class MainActivity : ComponentActivity() {
         receiverRegistered = true
         try {
             if (adapter.isDiscovering) {
-                status("סריקה קלאסית כבר פעילה — ממשיך להאזין למכשירים גלויים.")
+                status("סריקה רגילה כבר פעילה — מאזין למכשירים שנמצאו.")
             } else if (adapter.startDiscovery()) {
-                status("סריקה קלאסית הופעלה. מחפש מכשירים גלויים וגם BLE…")
+                status("סריקה רגילה הופעלה. מכשירים צריכים להיות גלויים כדי להופיע.")
             } else {
-                val scanGranted = if (Build.VERSION.SDK_INT >= 31) ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED else ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                val connectGranted = Build.VERSION.SDK_INT < 31 || ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
-                val detail = when { !adapter.isEnabled -> "Bluetooth כבוי."; !scanGranted -> "חסרה הרשאת סריקת Bluetooth."; !connectGranted -> "חסרה הרשאת מכשירים בקרבת מקום."; else -> "Android החזיר false בלי למסור קוד שגיאה. ייתכן ששירות Bluetooth עסוק או שהיצרן חסם גילוי קלאסי." }
-                status("שגיאה בסריקה הקלאסית: " + detail + " BLE ינסה להמשיך. Android " + Build.VERSION.SDK_INT + ", מצב מתאם " + adapter.state + ".")
+                status("Android לא הצליח להתחיל סריקה רגילה. בדוק ש-Bluetooth פועל, שההרשאות אושרו ושאין סריקה אחרת פעילה.")
             }
         } catch (e: SecurityException) {
-            status("שגיאת הרשאה בסריקה הקלאסית: " + (e.message ?: "Android חסם את startDiscovery") + ". בדוק הרשאת מכשירים בקרבת מקום.")
+            status("שגיאת הרשאה בסריקה רגילה: ${e.message ?: "Android חסם את הסריקה"}.")
         } catch (e: Exception) {
-            status("שגיאה בהפעלת סריקה קלאסית: " + e.javaClass.simpleName + ": " + (e.message ?: "ללא פירוט") + ". BLE ינסה להמשיך.")
-        }
-        scanner = adapter.bluetoothLeScanner
-        if (scanner == null) {
-            status("סריקה קלאסית פעילה; BLE אינו זמין כרגע.")
-            return
-        }
-        callback?.let { try { scanner?.stopScan(it) } catch (_: Exception) {} }
-        callback = object : ScanCallback() {
-            override fun onScanResult(callbackType: Int, result: ScanResult) {
-                try {
-                    val address = result.device.address
-                    val name = result.scanRecord?.deviceName
-                        ?: try { result.device.name } catch (_: SecurityException) { null }
-                        ?: "מכשיר Bluetooth"
-                    onFound?.invoke(NearbyDevice(address, name, result.rssi))
-                } catch (_: SecurityException) {
-                    status("Android חסם גישה לפרטי BLE. בדוק הרשאות.")
-                }
-            }
-            override fun onScanFailed(errorCode: Int) {
-                status("סריקת BLE נכשלה (קוד $errorCode); הסריקה הקלאסית ממשיכה.")
-            }
-        }
-        try {
-            scanner?.startScan(null, android.bluetooth.le.ScanSettings.Builder()
-                .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY).build(), callback)
-        } catch (_: SecurityException) {
-            status("אין הרשאת BLE; הסריקה הקלאסית ממשיכה.")
-        } catch (e: Exception) {
-            status("שגיאה בסריקת BLE: ${e.message ?: "לא ידועה"}")
+            status("שגיאה בסריקה רגילה: ${e.javaClass.simpleName}: ${e.message ?: "ללא פירוט"}.")
         }
     }
     @SuppressLint("MissingPermission")
@@ -208,7 +170,7 @@ fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit, (String) -> Unit) -> Unit, 
     var scanning by remember { mutableStateOf(false) }
     var mode by remember { mutableStateOf(prefs.getString("mode", "both") ?: "both") }
     var banner by remember { mutableStateOf<String?>(null) }
-    var scanStatus by remember { mutableStateOf("לחץ על התחלת סריקה כדי לחפש מכשירי BLE בסביבה.") }
+    var scanStatus by remember { mutableStateOf("לחץ על התחלת סריקה כדי לחפש מכשירי Bluetooth רגילים.") }
     var selected by remember { mutableStateOf<NearbyDevice?>(null) }
     var nameInput by remember { mutableStateOf("") }
     var lastAlert by remember { mutableStateOf("") }
@@ -338,7 +300,7 @@ fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit, (String) -> Unit) -> Unit, 
                 }
             }
             item { Text("מכשירים שנמצאו (${nearby.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
-            if (nearby.isEmpty()) item { Text("עדיין לא נמצאו מכשירים. מכשירים קלאסיים צריכים להיות במצב גלוי, ומכשירי BLE צריכים לשדר פרסום Bluetooth.", style = MaterialTheme.typography.bodySmall) }
+            if (nearby.isEmpty()) item { Text("עדיין לא נמצאו מכשירים. כדי שמכשיר יופיע, יש להפעיל בו מצב גלוי ל-Bluetooth.", style = MaterialTheme.typography.bodySmall) }
             items(nearby, key = { it.address }) { device ->
                 Card(onClick = { selected = device; nameInput = device.name.takeUnless { it == "מכשיר Bluetooth" } ?: "" }) {
                     Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -377,7 +339,7 @@ fun MiMagiScreen(startScan: ((NearbyDevice) -> Unit, (String) -> Unit) -> Unit, 
                     }
                 }
             }
-            item { Text("חשוב: לא כל טלפון משדר BLE באופן שניתן לגלות. כתובת המכשיר עשויה להשתנות, ולכן זיהוי חוזר אינו מובטח.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            item { Text("חשוב: הסריקה הרגילה מזהה מכשירים שנמצאים במצב גלוי. כתובת המכשיר עשויה להשתנות, ולכן זיהוי חוזר אינו מובטח.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
 
